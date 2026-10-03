@@ -1,0 +1,39 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtconnectivity qtmultimedia'
+          cache: true
+
+      - name: Install OpenSSL
+        run: choco install openssl -y
+
+      - name: Configure
+        working-directory: windows
+        run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+
+      - name: Build
+        working-directory: windows
+        run: cmake --build build --config Release
+
+      - name: Bundle Qt DLLs
+        working-directory: windows/build/Release
+        run: windeployqt --qmldir ../../ librepods-windows.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: librepods-windows
+          path: windows/build/Release
