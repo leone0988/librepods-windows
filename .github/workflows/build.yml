@@ -31,7 +31,16 @@ jobs:
       - name: Bundle Qt DLLs
         working-directory: windows/build/Release
         run: windeployqt --qmldir ../../ librepods-windows.exe
-
+      - name: Copy OpenSSL DLLs
+        shell: pwsh
+        run: |
+          $dest = "windows/build/Release"
+          $found = Get-ChildItem -Path "C:\Program Files\OpenSSL*","C:\ProgramData\chocolatey\lib\openssl*" -Recurse -Include "libcrypto-*-x64.dll","libssl-*-x64.dll" -ErrorAction SilentlyContinue
+          if (-not $found) { throw "OpenSSL DLLs not found" }
+          $found | ForEach-Object {
+            Copy-Item $_.FullName $dest -Force
+            Write-Host "Copied $($_.Name)"
+          }
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
