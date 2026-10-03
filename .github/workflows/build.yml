@@ -32,6 +32,28 @@ jobs:
         working-directory: windows/build/Release
         run: windeployqt --release --compiler-runtime --qmldir ../../ --verbose 1 librepods-windows.exe
 
+      - name: Copy MSVC runtime (windeployqt --compiler-runtime is no-op on this runner)
+        shell: pwsh
+        run: |
+          $dest = "windows/build/Release"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -property installationPath
+          Write-Host "VS at $vsPath"
+          $crtDirs = Get-ChildItem "$vsPath\VC\Redist\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Join-Path $_.FullName "x64\Microsoft.VC14*.CRT"
+          } | Where-Object { Test-Path $_ }
+          if (-not $crtDirs) { throw "No VC redist CRT dirs found" }
+          $dlls = @("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll")
+          foreach ($dll in $dlls) {
+            $src = Get-ChildItem $crtDirs -Filter $dll -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($src) {
+              Copy-Item $src.FullName $dest -Force
+              Write-Host "Copied $dll"
+            } else {
+              Write-Host "WARN: $dll not found in redist, skipping"
+            }
+          }
+
       - name: Copy OpenSSL DLLs matching exe imports
         shell: pwsh
         run: |
