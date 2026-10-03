@@ -9,6 +9,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Match QML resource prefix to load path (QTP0001 NEW)
+        shell: pwsh
+        run: |
+          $f = "windows/CMakeLists.txt"
+          $t = Get-Content $f -Raw
+          if ($t -notmatch 'QTP0001') {
+            $t = $t -replace 'qt_standard_project_setup\(\)', 'qt_standard_project_setup(REQUIRES 6.7)'
+            Set-Content $f $t -NoNewline
+            Write-Host "Patched qt_standard_project_setup to REQUIRES 6.7"
+          } else {
+            Write-Host "QTP0001 already set, skip"
+          }
+          Select-String -Path $f -Pattern 'qt_standard_project_setup|QTP0001'
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -87,7 +101,7 @@ jobs:
         shell: pwsh
         run: |
           $release = "windows/build/Release"
-          Get-ChildItem $release -Include "*.exp","*.lib" -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem "$release/*" -Include "*.exp","*.lib" -ErrorAction SilentlyContinue | Remove-Item -Force
           Remove-Item "$release/qmltooling" -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Verify portable bundle
@@ -119,6 +133,17 @@ jobs:
           if ($missingSsl) { throw "Missing OpenSSL DLLs: $($missingSsl -join ', ')" }
           if (Test-Path "$release/Qt6Multimedia.dll") { Write-Host "NOTE: unused Qt6Multimedia.dll deployed, harmless" }
           Get-ChildItem $release
+
+      - name: Smoke test (exe stays alive = QML loaded)
+        shell: pwsh
+        run: |
+          $dir = "windows/build/Release"
+          $p = Start-Process -FilePath "$dir/librepods-windows.exe" -WorkingDirectory $dir -PassThru
+          if ($p.WaitForExit(15000)) {
+            throw "exe exited quickly with code $($p.ExitCode); QML failed to load"
+          }
+          Write-Host "PASS: process alive after 15s, QML module loaded"
+          Stop-Process -Id $p.Id -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
