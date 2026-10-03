@@ -12,7 +12,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.7.*'
+          version: '6.7.3'
           arch: 'win64_msvc2019_64'
           modules: 'qtconnectivity qtmultimedia'
           cache: true
@@ -28,19 +28,66 @@ jobs:
         working-directory: windows
         run: cmake --build build --config Release
 
-      - name: Bundle Qt DLLs
+      - name: Deploy Qt + MSVC runtime
         working-directory: windows/build/Release
-        run: windeployqt --qmldir ../../ librepods-windows.exe
-      - name: Copy OpenSSL DLLs
+        run: windeployqt --release --compiler-runtime --qmldir ../../ --verbose 1 librepods-windows.exe
+
+      - name: Copy OpenSSL DLLs matching exe imports
         shell: pwsh
         run: |
           $dest = "windows/build/Release"
+          $exe = "$dest/librepods-windows.exe"
+          $raw = [System.IO.File]::ReadAllBytes($exe)
+          $txt = [System.Text.Encoding]::ASCII.GetString($raw)
+          $needed = [regex]::Matches($txt, 'lib(crypto|ssl)-\d+-x64\.dll') | ForEach-Object { $_.Value } | Sort-Object -Unique
+          if (-not $needed) { throw "No OpenSSL DLL names found in exe imports" }
+          Write-Host "Exe requires: $($needed -join ', ')"
           $found = Get-ChildItem -Path "C:\Program Files\OpenSSL*","C:\ProgramData\chocolatey\lib\openssl*" -Recurse -Include "libcrypto-*-x64.dll","libssl-*-x64.dll" -ErrorAction SilentlyContinue
           if (-not $found) { throw "OpenSSL DLLs not found" }
-          $found | ForEach-Object {
-            Copy-Item $_.FullName $dest -Force
-            Write-Host "Copied $($_.Name)"
+          foreach ($dll in $needed) {
+            $src = $found | Where-Object { $_.Name -eq $dll } | Select-Object -First 1
+            if (-not $src) { throw "Required $dll not found on build machine" }
+            Copy-Item $src.FullName $dest -Force
+            Write-Host "Copied $dll"
           }
+
+      - name: Clean packaging junk
+        shell: pwsh
+        run: |
+          $release = "windows/build/Release"
+          Get-ChildItem $release -Include "*.exp","*.lib" -ErrorAction SilentlyContinue | Remove-Item -Force
+          Remove-Item "$release/qmltooling" -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Verify portable bundle
+        shell: pwsh
+        run: |
+          $release = "windows/build/Release"
+          $required = @(
+            "librepods-windows.exe",
+            "Qt6Core.dll",
+            "Qt6Gui.dll",
+            "Qt6Widgets.dll",
+            "Qt6Qml.dll",
+            "Qt6Quick.dll",
+            "Qt6Bluetooth.dll",
+            "Qt6Network.dll",
+            "msvcp140.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "platforms/qwindows.dll",
+            "tls/qschannelbackend.dll"
+          )
+          $missing = $required | Where-Object { -not (Test-Path "$release/$_") }
+          if ($missing) { throw "Missing runtime files: $($missing -join ', ')" }
+          # Exe's exact OpenSSL imports must resolve beside the exe
+          $raw = [System.IO.File]::ReadAllBytes("$release/librepods-windows.exe")
+          $txt = [System.Text.Encoding]::ASCII.GetString($raw)
+          $needed = [regex]::Matches($txt, 'lib(crypto|ssl)-\d+-x64\.dll') | ForEach-Object { $_.Value } | Sort-Object -Unique
+          $missingSsl = $needed | Where-Object { -not (Test-Path "$release/$_") }
+          if ($missingSsl) { throw "Missing OpenSSL DLLs: $($missingSsl -join ', ')" }
+          if (Test-Path "$release/Qt6Multimedia.dll") { Write-Host "NOTE: unused Qt6Multimedia.dll deployed, harmless" }
+          Get-ChildItem $release
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
