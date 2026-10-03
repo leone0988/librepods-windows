@@ -36,23 +36,33 @@ jobs:
         shell: pwsh
         run: |
           $dest = "windows/build/Release"
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -property installationPath
-          Write-Host "VS at $vsPath"
-          $crtDirs = Get-ChildItem "$vsPath\VC\Redist\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            Join-Path $_.FullName "x64\Microsoft.VC14*.CRT"
-          } | Where-Object { Test-Path $_ }
-          if (-not $crtDirs) { throw "No VC redist CRT dirs found" }
           $dlls = @("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll")
-          foreach ($dll in $dlls) {
-            $src = Get-ChildItem $crtDirs -Filter $dll -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($src) {
-              Copy-Item $src.FullName $dest -Force
-              Write-Host "Copied $dll"
-            } else {
-              Write-Host "WARN: $dll not found in redist, skipping"
+          $candidates = @()
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            $vsPath = (& $vswhere -latest -property installationPath) | Select-Object -First 1
+            Write-Host "VS at $vsPath"
+            $candidates += Get-ChildItem "$vsPath\VC\Redist\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              Get-ChildItem (Join-Path $_.FullName "x64\Microsoft.VC14*.CRT") -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
             }
           }
+          # Fallback: runner's own installed runtime always exists here
+          $candidates += "C:\Windows\System32"
+          Write-Host "Search dirs: $($candidates -join '; ')"
+          $failed = @()
+          foreach ($dll in $dlls) {
+            if (Test-Path "$dest/$dll") { Write-Host "$dll already present, skip"; continue }
+            $src = $candidates | ForEach-Object { Join-Path $_ $dll } | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($src) {
+              Copy-Item $src $dest -Force
+              Write-Host "Copied $dll from $src"
+            } else {
+              Write-Host "WARN: $dll not found anywhere, skipping"
+              if ($dll -in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) { $failed += $dll }
+            }
+          }
+          if ($failed) { throw "Critical MSVC DLLs missing: $($failed -join ', ')" }
+          Get-ChildItem $dest/*.dll | Select-Object Name, Length
 
       - name: Copy OpenSSL DLLs matching exe imports
         shell: pwsh
